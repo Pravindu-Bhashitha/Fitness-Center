@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: fitzone-backend
+    env: node
+    plan: free
+    branch: low-cost-deploy
+    buildCommand: "npm install && npm run build"
+    startCommand: "npm run start"
+    root: .
+    envVars:
+      - key: DATABASE_URL
+        scope: private
+      - key: PGSSL
+        value: 'true'
+        scope: private
+    healthCheckPath: /health
+    autoDeploy: true
