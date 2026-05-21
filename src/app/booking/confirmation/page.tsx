@@ -21,7 +21,7 @@ type Booking = {
   createdAt: string;
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_BOOKING_API_URL ?? 'http://localhost:4000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.NEXT_PUBLIC_BOOKING_API_URL ?? 'http://localhost:4000';
 
 export default function BookingConfirmationPage() {
   const searchParams = useSearchParams();

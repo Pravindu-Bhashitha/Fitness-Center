@@ -1,13 +1,10 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
-import Database from 'better-sqlite3';
+import { Pool } from 'pg';
 
 export type BookingRecord = {
   id: string;
   type: 'trainer' | 'class';
   trainerOrClass: string;
-
   specialty: string;
   date: string;
   time: string;
@@ -53,30 +50,33 @@ export type ClassRecord = {
   createdAt: string;
   updatedAt: string;
 };
-const dataDir = path.resolve(process.cwd(), 'data');
-const databasePath = path.join(dataDir, 'bookings.v2.sqlite');
 
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error('DATABASE_URL is required for the PostgreSQL deployment branch.');
 }
 
-const database = new Database(databasePath);
+const pool = new Pool({
+  connectionString,
+  ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined,
+});
 
-database.exec(`
+const schemaSql = `
   CREATE TABLE IF NOT EXISTS bookings (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
-    trainerOrClass TEXT NOT NULL,
+    "trainerOrClass" TEXT NOT NULL,
     specialty TEXT NOT NULL,
     date TEXT NOT NULL,
     time TEXT NOT NULL,
     duration TEXT NOT NULL,
-    fullName TEXT NOT NULL,
+    "fullName" TEXT NOT NULL,
     email TEXT NOT NULL,
     phone TEXT NOT NULL,
     goals TEXT,
     notes TEXT,
-    createdAt TEXT NOT NULL
+    "createdAt" TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS messages (
@@ -85,7 +85,7 @@ database.exec(`
     email TEXT NOT NULL,
     phone TEXT NOT NULL,
     message TEXT NOT NULL,
-    createdAt TEXT NOT NULL
+    "createdAt" TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS trainers (
@@ -96,8 +96,8 @@ database.exec(`
     certifications TEXT NOT NULL,
     bio TEXT NOT NULL,
     avatar TEXT NOT NULL,
-    createdAt TEXT NOT NULL,
-    updatedAt TEXT NOT NULL
+    "createdAt" TEXT NOT NULL,
+    "updatedAt" TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS classes (
@@ -109,397 +109,383 @@ database.exec(`
     level TEXT NOT NULL,
     description TEXT NOT NULL,
     icon TEXT NOT NULL,
-    createdAt TEXT NOT NULL,
-    updatedAt TEXT NOT NULL
+    "createdAt" TEXT NOT NULL,
+    "updatedAt" TEXT NOT NULL
   );
-`);
-const insertBookingStatement = database.prepare(`
-  INSERT INTO bookings (
-    id,
-    type,
-    trainerOrClass,
-    specialty,
-    date,
-    time,
-    duration,
-    fullName,
-    email,
-    phone,
-    goals,
-    notes,
-    createdAt
-  ) VALUES (
-    @id,
-    @type,
-    @trainerOrClass,
-    @specialty,
-    @date,
-    @time,
-    @duration,
-    @fullName,
-    @email,
-    @phone,
-    @goals,
-    @notes,
-    @createdAt
-  )
-`);
+`;
 
-const insertMessageStatement = database.prepare(`
-  INSERT INTO messages (
-    id,
-    name,
-    email,
-    phone,
-    message,
-    createdAt
-  ) VALUES (
-    @id,
-    @name,
-    @email,
-    @phone,
-    @message,
-    @createdAt
-  )
-`);
+let initPromise: Promise<void> | null = null;
 
-const insertTrainerStatement = database.prepare(`
-  INSERT INTO trainers (
-    id,
-    name,
-    specialty,
-    experience,
-    certifications,
-    bio,
-    avatar,
-    createdAt,
-    updatedAt
-  ) VALUES (
-    @id,
-    @name,
-    @specialty,
-    @experience,
-    @certifications,
-    @bio,
-    @avatar,
-    @createdAt,
-    @updatedAt
-  )
-`);
+function normalizeBooking(row: any): BookingRecord {
+  return {
+    id: row.id,
+    type: row.type,
+    trainerOrClass: row.trainerOrClass,
+    specialty: row.specialty,
+    date: row.date,
+    time: row.time,
+    duration: row.duration,
+    fullName: row.fullName,
+    email: row.email,
+    phone: row.phone,
+    goals: row.goals ?? '',
+    notes: row.notes ?? '',
+    createdAt: row.createdAt,
+  };
+}
 
-const updateTrainerStatement = database.prepare(`
-  UPDATE trainers
-  SET
-    name = @name,
-    specialty = @specialty,
-    experience = @experience,
-    certifications = @certifications,
-    bio = @bio,
-    avatar = @avatar,
-    updatedAt = @updatedAt
-  WHERE id = @id
-`);
+function normalizeMessage(row: any): MessageRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    message: row.message,
+    createdAt: row.createdAt,
+  };
+}
 
-const deleteTrainerStatement = database.prepare('DELETE FROM trainers WHERE id = ?');
+function normalizeTrainer(row: any): TrainerRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    specialty: row.specialty,
+    experience: row.experience,
+    certifications: row.certifications,
+    bio: row.bio,
+    avatar: row.avatar,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
-const selectAllTrainersStatement = database.prepare('SELECT * FROM trainers ORDER BY createdAt DESC');
+function normalizeClass(row: any): ClassRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    schedule: row.schedule,
+    duration: row.duration,
+    capacity: row.capacity,
+    level: row.level,
+    description: row.description,
+    icon: row.icon,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
-const selectTrainerByIdStatement = database.prepare('SELECT * FROM trainers WHERE id = ?');
-const insertClassStatement = database.prepare(`
-  INSERT INTO classes (
-    id,
-    name,
-    schedule,
-    duration,
-    capacity,
-    level,
-    description,
-    icon,
-    createdAt,
-    updatedAt
-  ) VALUES (
-    @id,
-    @name,
-    @schedule,
-    @duration,
-    @capacity,
-    @level,
-    @description,
-    @icon,
-    @createdAt,
-    @updatedAt
-  )
-`);
+async function seedIfNeeded() {
+  const trainerCount = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM trainers');
+  if (Number(trainerCount.rows[0]?.count ?? 0) === 0) {
+    const now = new Date().toISOString();
+    const seedTrainers = [
+      {
+        name: 'James Mitchell',
+        specialty: 'Strength & Conditioning',
+        experience: '8 years',
+        certifications: 'ISSA, NASM-CPT',
+        bio: 'Expert in building muscle and increasing athletic performance.',
+        avatar: '👨‍🦱',
+      },
+      {
+        name: 'Lisa Anderson',
+        specialty: 'Yoga & Flexibility',
+        experience: '10 years',
+        certifications: 'RYT-500, Pilates Instructor',
+        bio: 'Dedicated to helping clients find balance and inner peace through yoga.',
+        avatar: '👩‍🦳',
+      },
+      {
+        name: 'Marcus Johnson',
+        specialty: 'HIIT & Cardio',
+        experience: '6 years',
+        certifications: 'ACE, NASM, Spin Instructor',
+        bio: 'High-energy trainer specializing in cardiovascular fitness and endurance.',
+        avatar: '👨‍🦴',
+      },
+      {
+        name: 'Sophie Rodriguez',
+        specialty: 'Personal Training',
+        experience: '7 years',
+        certifications: 'ISSA, Nutrition Specialist',
+        bio: 'Personalized training programs that combine fitness with nutritional guidance.',
+        avatar: '👩‍🦰',
+      },
+      {
+        name: 'David Chen',
+        specialty: 'Martial Arts & Boxing',
+        experience: '12 years',
+        certifications: 'Black Belt, Boxing Coach',
+        bio: 'Passionate about teaching discipline, technique, and self-defense.',
+        avatar: '👨‍💼',
+      },
+      {
+        name: 'Amanda White',
+        specialty: 'Group Fitness',
+        experience: '5 years',
+        certifications: 'Zumba Master, Group Fitness Instructor',
+        bio: 'Makes fitness fun and accessible for everyone in our group classes.',
+        avatar: '👩‍🦱',
+      },
+    ];
 
-const updateClassStatement = database.prepare(`
-  UPDATE classes
-  SET
-    name = @name,
-    schedule = @schedule,
-    duration = @duration,
-    capacity = @capacity,
-    level = @level,
-    description = @description,
-    icon = @icon,
-    updatedAt = @updatedAt
-  WHERE id = @id
-`);
+    for (const trainer of seedTrainers) {
+      await pool.query(
+        `INSERT INTO trainers (id, name, specialty, experience, certifications, bio, avatar, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [crypto.randomUUID(), trainer.name, trainer.specialty, trainer.experience, trainer.certifications, trainer.bio, trainer.avatar, now, now],
+      );
+    }
+  }
 
-const deleteClassStatement = database.prepare('DELETE FROM classes WHERE id = ?');
+  const classCount = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM classes');
+  if (Number(classCount.rows[0]?.count ?? 0) === 0) {
+    const now = new Date().toISOString();
+    const seedClasses = [
+      {
+        name: 'HIIT Training',
+        schedule: 'Mon, Wed, Fri - 6:00 AM',
+        duration: '45 minutes',
+        capacity: '20 people',
+        level: 'Intermediate',
+        description: 'High-intensity interval training for maximum calorie burn.',
+        icon: '🏃',
+      },
+      {
+        name: 'Power Yoga',
+        schedule: 'Tue, Thu - 5:30 PM',
+        duration: '60 minutes',
+        capacity: '25 people',
+        level: 'All Levels',
+        description: 'Energizing yoga flow that builds strength and flexibility.',
+        icon: '🧘',
+      },
+      {
+        name: 'Spinning Class',
+        schedule: 'Daily - 7:00 AM & 5:00 PM',
+        duration: '50 minutes',
+        capacity: '30 people',
+        level: 'All Levels',
+        description: 'Indoor cycling with motivating music and challenging workouts.',
+        icon: '🚴',
+      },
+      {
+        name: 'Zumba Dance',
+        schedule: 'Wed, Sat - 6:30 PM',
+        duration: '55 minutes',
+        capacity: '35 people',
+        level: 'Beginner',
+        description: 'Fun dance workouts that feel like a party!',
+        icon: '💃',
+      },
+      {
+        name: 'Boxing Basics',
+        schedule: 'Mon, Wed, Fri - 4:00 PM',
+        duration: '50 minutes',
+        capacity: '15 people',
+        level: 'Beginner',
+        description: 'Learn boxing techniques while getting an amazing cardio workout.',
+        icon: '🥊',
+      },
+      {
+        name: 'Pilates Core',
+        schedule: 'Tue, Thu, Sat - 10:00 AM',
+        duration: '45 minutes',
+        capacity: '20 people',
+        level: 'Intermediate',
+        description: 'Strengthen your core with precision pilates movements.',
+        icon: '🧖',
+      },
+    ];
 
-const selectAllClassesStatement = database.prepare('SELECT * FROM classes ORDER BY createdAt DESC');
+    for (const classItem of seedClasses) {
+      await pool.query(
+        `INSERT INTO classes (id, name, schedule, duration, capacity, level, description, icon, "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [crypto.randomUUID(), classItem.name, classItem.schedule, classItem.duration, classItem.capacity, classItem.level, classItem.description, classItem.icon, now, now],
+      );
+    }
+  }
+}
 
-const selectClassByIdStatement = database.prepare('SELECT * FROM classes WHERE id = ?');
-const selectAllBookingsStatement = database.prepare(
-  'SELECT * FROM bookings ORDER BY createdAt DESC',
-);
+export async function initDatabase() {
+  if (!initPromise) {
+    initPromise = (async () => {
+      await pool.query(schemaSql);
+      await seedIfNeeded();
+    })();
+  }
 
-const selectBookingByIdStatement = database.prepare(
-  'SELECT * FROM bookings WHERE id = ?',
-);
+  await initPromise;
+}
 
-const selectAllMessagesStatement = database.prepare(
-  'SELECT * FROM messages ORDER BY createdAt DESC',
-);
-
-export const createBooking = (booking: Omit<BookingRecord, 'id' | 'createdAt'>) => {
+export async function createBooking(booking: Omit<BookingRecord, 'id' | 'createdAt'>) {
+  await initDatabase();
   const record: BookingRecord = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     ...booking,
   };
 
-  insertBookingStatement.run(record);
+  await pool.query(
+    `INSERT INTO bookings (id, type, "trainerOrClass", specialty, date, time, duration, "fullName", email, phone, goals, notes, "createdAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    [record.id, record.type, record.trainerOrClass, record.specialty, record.date, record.time, record.duration, record.fullName, record.email, record.phone, record.goals, record.notes, record.createdAt],
+  );
+
   return record;
-};
+}
 
-export const listBookings = (): BookingRecord[] => {
-  return selectAllBookingsStatement.all() as BookingRecord[];
-};
+export async function listBookings(): Promise<BookingRecord[]> {
+  await initDatabase();
+  const result = await pool.query('SELECT * FROM bookings ORDER BY "createdAt" DESC');
+  return result.rows.map(normalizeBooking);
+}
 
-export const getBookingById = (id: string): BookingRecord | undefined => {
-  return selectBookingByIdStatement.get(id) as BookingRecord | undefined;
-};
+export async function getBookingById(id: string): Promise<BookingRecord | undefined> {
+  await initDatabase();
+  const result = await pool.query('SELECT * FROM bookings WHERE id = $1', [id]);
+  return result.rows[0] ? normalizeBooking(result.rows[0]) : undefined;
+}
 
-export const createMessage = (msg: Omit<MessageRecord, 'id' | 'createdAt'>) => {
+export async function createMessage(msg: Omit<MessageRecord, 'id' | 'createdAt'>) {
+  await initDatabase();
   const record: MessageRecord = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     ...msg,
   };
 
-  insertMessageStatement.run(record);
+  await pool.query(
+    `INSERT INTO messages (id, name, email, phone, message, "createdAt") VALUES ($1, $2, $3, $4, $5, $6)`,
+    [record.id, record.name, record.email, record.phone, record.message, record.createdAt],
+  );
+
   return record;
-};
-
-export const listMessages = (): MessageRecord[] => {
-  return selectAllMessagesStatement.all() as MessageRecord[];
-};
-
-export const listTrainers = (): TrainerRecord[] => {
-  return selectAllTrainersStatement.all() as TrainerRecord[];
-};
-
-export const getTrainerById = (id: string): TrainerRecord | undefined => {
-  return selectTrainerByIdStatement.get(id) as TrainerRecord | undefined;
-};
-
-export const createTrainer = (trainer: Omit<TrainerRecord, 'id' | 'createdAt' | 'updatedAt'>) => {
-  const now = new Date().toISOString();
-  const record: TrainerRecord = {
-    id: crypto.randomUUID(),
-    createdAt: now,
-    updatedAt: now,
-    ...trainer,
-  };
-
-  insertTrainerStatement.run(record);
-  return record;
-};
-
-export const updateTrainer = (id: string, trainer: Omit<TrainerRecord, 'id' | 'createdAt' | 'updatedAt'>) => {
-  const existing = getTrainerById(id);
-
-  if (!existing) {
-    return undefined;
-  }
-
-  const record: TrainerRecord = {
-    ...existing,
-    ...trainer,
-    id,
-    updatedAt: new Date().toISOString(),
-  };
-
-  updateTrainerStatement.run(record);
-  return record;
-};
-
-export const deleteTrainer = (id: string) => {
-  deleteTrainerStatement.run(id);
-};
-
-export const listClasses = (): ClassRecord[] => {
-  return selectAllClassesStatement.all() as ClassRecord[];
-};
-
-export const getClassById = (id: string): ClassRecord | undefined => {
-  return selectClassByIdStatement.get(id) as ClassRecord | undefined;
-};
-
-export const createClass = (classRecord: Omit<ClassRecord, 'id' | 'createdAt' | 'updatedAt'>) => {
-  const now = new Date().toISOString();
-  const record: ClassRecord = {
-    id: crypto.randomUUID(),
-    createdAt: now,
-    updatedAt: now,
-    ...classRecord,
-  };
-
-  insertClassStatement.run(record);
-  return record;
-};
-
-export const updateClass = (id: string, classRecord: Omit<ClassRecord, 'id' | 'createdAt' | 'updatedAt'>) => {
-  const existing = getClassById(id);
-
-  if (!existing) {
-    return undefined;
-  }
-
-  const record: ClassRecord = {
-    ...existing,
-    ...classRecord,
-    id,
-    updatedAt: new Date().toISOString(),
-  };
-
-  updateClassStatement.run(record);
-  return record;
-};
-
-export const deleteClass = (id: string) => {
-  deleteClassStatement.run(id);
-};
-
-const seedTrainers = [
-  {
-    name: 'James Mitchell',
-    specialty: 'Strength & Conditioning',
-    experience: '8 years',
-    certifications: 'ISSA, NASM-CPT',
-    bio: 'Expert in building muscle and increasing athletic performance.',
-    avatar: '👨‍🦱',
-  },
-  {
-    name: 'Lisa Anderson',
-    specialty: 'Yoga & Flexibility',
-    experience: '10 years',
-    certifications: 'RYT-500, Pilates Instructor',
-    bio: 'Dedicated to helping clients find balance and inner peace through yoga.',
-    avatar: '👩‍🦳',
-  },
-  {
-    name: 'Marcus Johnson',
-    specialty: 'HIIT & Cardio',
-    experience: '6 years',
-    certifications: 'ACE, NASM, Spin Instructor',
-    bio: 'High-energy trainer specializing in cardiovascular fitness and endurance.',
-    avatar: '👨‍🦴',
-  },
-  {
-    name: 'Sophie Rodriguez',
-    specialty: 'Personal Training',
-    experience: '7 years',
-    certifications: 'ISSA, Nutrition Specialist',
-    bio: 'Personalized training programs that combine fitness with nutritional guidance.',
-    avatar: '👩‍🦰',
-  },
-  {
-    name: 'David Chen',
-    specialty: 'Martial Arts & Boxing',
-    experience: '12 years',
-    certifications: 'Black Belt, Boxing Coach',
-    bio: 'Passionate about teaching discipline, technique, and self-defense.',
-    avatar: '👨‍💼',
-  },
-  {
-    name: 'Amanda White',
-    specialty: 'Group Fitness',
-    experience: '5 years',
-    certifications: 'Zumba Master, Group Fitness Instructor',
-    bio: 'Makes fitness fun and accessible for everyone in our group classes.',
-    avatar: '👩‍🦱',
-  },
-];
-
-const existingTrainers = selectAllTrainersStatement.all() as TrainerRecord[];
-if (existingTrainers.length === 0) {
-  seedTrainers.forEach((trainer) => {
-    createTrainer(trainer);
-  });
 }
 
-const seedClasses = [
-  {
-    name: 'HIIT Training',
-    schedule: 'Mon, Wed, Fri - 6:00 AM',
-    duration: '45 minutes',
-    capacity: '20 people',
-    level: 'Intermediate',
-    description: 'High-intensity interval training for maximum calorie burn.',
-    icon: '🏃',
-  },
-  {
-    name: 'Power Yoga',
-    schedule: 'Tue, Thu - 5:30 PM',
-    duration: '60 minutes',
-    capacity: '25 people',
-    level: 'All Levels',
-    description: 'Energizing yoga flow that builds strength and flexibility.',
-    icon: '🧘',
-  },
-  {
-    name: 'Spinning Class',
-    schedule: 'Daily - 7:00 AM & 5:00 PM',
-    duration: '50 minutes',
-    capacity: '30 people',
-    level: 'All Levels',
-    description: 'Indoor cycling with motivating music and challenging workouts.',
-    icon: '🚴',
-  },
-  {
-    name: 'Zumba Dance',
-    schedule: 'Wed, Sat - 6:30 PM',
-    duration: '55 minutes',
-    capacity: '35 people',
-    level: 'Beginner',
-    description: 'Fun dance workouts that feel like a party!',
-    icon: '💃',
-  },
-  {
-    name: 'Boxing Basics',
-    schedule: 'Mon, Wed, Fri - 4:00 PM',
-    duration: '50 minutes',
-    capacity: '15 people',
-    level: 'Beginner',
-    description: 'Learn boxing techniques while getting an amazing cardio workout.',
-    icon: '🥊',
-  },
-  {
-    name: 'Pilates Core',
-    schedule: 'Tue, Thu, Sat - 10:00 AM',
-    duration: '45 minutes',
-    capacity: '20 people',
-    level: 'Intermediate',
-    description: 'Strengthen your core with precision pilates movements.',
-    icon: '🧖',
-  },
-];
+export async function listMessages(): Promise<MessageRecord[]> {
+  await initDatabase();
+  const result = await pool.query('SELECT * FROM messages ORDER BY "createdAt" DESC');
+  return result.rows.map(normalizeMessage);
+}
 
-const existingClasses = selectAllClassesStatement.all() as ClassRecord[];
-if (existingClasses.length === 0) {
-  seedClasses.forEach((classItem) => {
-    createClass(classItem);
-  });
+export async function listTrainers(): Promise<TrainerRecord[]> {
+  await initDatabase();
+  const result = await pool.query('SELECT * FROM trainers ORDER BY "createdAt" DESC');
+  return result.rows.map(normalizeTrainer);
+}
+
+export async function getTrainerById(id: string): Promise<TrainerRecord | undefined> {
+  await initDatabase();
+  const result = await pool.query('SELECT * FROM trainers WHERE id = $1', [id]);
+  return result.rows[0] ? normalizeTrainer(result.rows[0]) : undefined;
+}
+
+export async function createTrainer(trainer: Omit<TrainerRecord, 'id' | 'createdAt' | 'updatedAt'>) {
+  await initDatabase();
+  const now = new Date().toISOString();
+  const record: TrainerRecord = {
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    ...trainer,
+  };
+
+  await pool.query(
+    `INSERT INTO trainers (id, name, specialty, experience, certifications, bio, avatar, "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [record.id, record.name, record.specialty, record.experience, record.certifications, record.bio, record.avatar, record.createdAt, record.updatedAt],
+  );
+
+  return record;
+}
+
+export async function updateTrainer(id: string, trainer: Omit<TrainerRecord, 'id' | 'createdAt' | 'updatedAt'>) {
+  await initDatabase();
+  const existing = await getTrainerById(id);
+  if (!existing) {
+    return undefined;
+  }
+
+  const record: TrainerRecord = {
+    ...existing,
+    ...trainer,
+    id,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await pool.query(
+    `UPDATE trainers
+     SET name = $1, specialty = $2, experience = $3, certifications = $4, bio = $5, avatar = $6, "updatedAt" = $7
+     WHERE id = $8`,
+    [record.name, record.specialty, record.experience, record.certifications, record.bio, record.avatar, record.updatedAt, record.id],
+  );
+
+  return record;
+}
+
+export async function deleteTrainer(id: string) {
+  await initDatabase();
+  await pool.query('DELETE FROM trainers WHERE id = $1', [id]);
+}
+
+export async function listClasses(): Promise<ClassRecord[]> {
+  await initDatabase();
+  const result = await pool.query('SELECT * FROM classes ORDER BY "createdAt" DESC');
+  return result.rows.map(normalizeClass);
+}
+
+export async function getClassById(id: string): Promise<ClassRecord | undefined> {
+  await initDatabase();
+  const result = await pool.query('SELECT * FROM classes WHERE id = $1', [id]);
+  return result.rows[0] ? normalizeClass(result.rows[0]) : undefined;
+}
+
+export async function createClass(classRecord: Omit<ClassRecord, 'id' | 'createdAt' | 'updatedAt'>) {
+  await initDatabase();
+  const now = new Date().toISOString();
+  const record: ClassRecord = {
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    ...classRecord,
+  };
+
+  await pool.query(
+    `INSERT INTO classes (id, name, schedule, duration, capacity, level, description, icon, "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [record.id, record.name, record.schedule, record.duration, record.capacity, record.level, record.description, record.icon, record.createdAt, record.updatedAt],
+  );
+
+  return record;
+}
+
+export async function updateClass(id: string, classRecord: Omit<ClassRecord, 'id' | 'createdAt' | 'updatedAt'>) {
+  await initDatabase();
+  const existing = await getClassById(id);
+  if (!existing) {
+    return undefined;
+  }
+
+  const record: ClassRecord = {
+    ...existing,
+    ...classRecord,
+    id,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await pool.query(
+    `UPDATE classes
+     SET name = $1, schedule = $2, duration = $3, capacity = $4, level = $5, description = $6, icon = $7, "updatedAt" = $8
+     WHERE id = $9`,
+    [record.name, record.schedule, record.duration, record.capacity, record.level, record.description, record.icon, record.updatedAt, record.id],
+  );
+
+  return record;
+}
+
+export async function deleteClass(id: string) {
+  await initDatabase();
+  await pool.query('DELETE FROM classes WHERE id = $1', [id]);
 }

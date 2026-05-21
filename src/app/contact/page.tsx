@@ -5,6 +5,7 @@ import Header from '../components/Header';
 import Footer from '../components/Footer';
 
 export default function Contact() {
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.NEXT_PUBLIC_BOOKING_API_URL ?? 'http://localhost:4000';
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -25,7 +26,7 @@ export default function Contact() {
     e.preventDefault();
     
     // Save to database via API
-    fetch('http://localhost:4000/api/messages', {
+    fetch(`${API_BASE_URL}/api/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

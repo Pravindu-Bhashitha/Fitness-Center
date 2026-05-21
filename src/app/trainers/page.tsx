@@ -7,12 +7,14 @@ export const metadata = {
   description: 'Meet our expert fitness trainers',
 };
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.NEXT_PUBLIC_BOOKING_API_URL ?? 'http://localhost:4000';
+
 export default async function Trainers() {
   let trainers: any[] = [];
   console.log('Fetching trainers from API...',trainers);
 
   try {
-    const res = await fetch('http://localhost:4000/api/trainers');
+    const res = await fetch(`${API_BASE_URL}/api/trainers`);
     console.log('Fetched trainers response:', res);
     if (res.ok) {
       const payload = await res.json();

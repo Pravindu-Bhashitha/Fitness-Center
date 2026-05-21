@@ -7,11 +7,13 @@ export const metadata = {
   description: 'Explore our wide variety of fitness classes',
 };
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.NEXT_PUBLIC_BOOKING_API_URL ?? 'http://localhost:4000';
+
 export default async function Classes() {
   let classesList: any[] = [];
 
   try {
-    const res = await fetch('http://localhost:4000/api/classes');
+    const res = await fetch(`${API_BASE_URL}/api/classes`);
     if (res.ok) {
       const payload = await res.json();
       classesList = Array.isArray(payload) ? payload : payload?.classes ?? payload?.data ?? [];

@@ -11,6 +11,7 @@ type Message = {
 };
 
 export default function MessagesPage() {
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +19,7 @@ export default function MessagesPage() {
 
   useEffect(() => {
     setLoading(true);
-    fetch('http://localhost:4000/api/messages')
+    fetch(`${API_BASE_URL}/api/messages`)
       .then((r) => r.json())
       .then((payload) => {
         const list = Array.isArray(payload) ? payload : payload?.messages ?? payload?.data ?? [];

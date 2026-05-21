@@ -18,6 +18,7 @@ type Booking = {
 };
 
 export default function AdminIndex() {
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
   const router = useRouter();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [trainerCount, setTrainerCount] = useState(0);
@@ -38,9 +39,9 @@ export default function AdminIndex() {
   useEffect(() => {
     setLoading(true);
     Promise.all([
-      fetch('http://localhost:4000/api/bookings').then((res) => res.json()),
-      fetch('http://localhost:4000/api/trainers').then((res) => res.json()),
-      fetch('http://localhost:4000/api/messages').then((res) => res.json()),
+      fetch(`${API_BASE_URL}/api/bookings`).then((res) => res.json()),
+      fetch(`${API_BASE_URL}/api/trainers`).then((res) => res.json()),
+      fetch(`${API_BASE_URL}/api/messages`).then((res) => res.json()),
     ])
       .then(([bookingsData, trainersData, messagesData]) => {
         setBookings(bookingsData.bookings ?? []);
